@@ -14,11 +14,14 @@ import sys
 import pickle
 import re
 import concurrent.futures
+from concurrent.futures import Future
+
 from typing import List
 from collections import OrderedDict
 import urllib.error
 import matplotlib.pyplot as plt
 from ratelimit import limits, sleep_and_retry
+from typing import Dict, List
 
 import traceback
 
@@ -46,6 +49,7 @@ class Div:
     VRL = "VRL"
     VRT = "VRT"
     UNRESOLVED = "UNRESOLVED"
+    TIMEOUT = "TIMEOUT"
 
 DIV_LOGANDIV = {
     "BCT" :  Div.BCT,
@@ -70,12 +74,16 @@ DIV_LOGANDIV = {
     "ARC":   Div.UNKNOWN  #No corresponding group in Logan (Archea)
 }
 
-UNRESOLVED_TAXID = -2 #Error couldn't be handled
+
+
 UNKNOWN_TAXID = -1    #Was probably deleted from SRA
+UNRESOLVED_TAXID = -2 #Error couldn't be handled
+TIMEOUT_TAXID = -3
 
 EXCEPTION_DIV = {
     UNRESOLVED_TAXID : Div.UNRESOLVED,
     UNKNOWN_TAXID    : Div.UNKNOWN,
+    TIMEOUT_TAXID    : Div.TIMEOUT,
     9604             : Div.HUMAN, #Hominidae
     10066            : Div.MICE   #Muridae
 }
@@ -146,6 +154,32 @@ def get_taxids_from_accessions(accessions: List[str], db="sra", batch_size=1000)
             else:
                 handle = Entrez.efetch(db=db, id=",".join(batch), retmax=batch_size)
 
+            response:str = handle.read().decode("utf-8")
+            handle.close()
+
+            matches = RE_EFETCH.findall(response)
+            
+            #If NCBI does shit (when it doesn't return all queried accessions metadata)
+            if len(matches) == 0:
+                pass
+            elif len(matches) != len(batch):
+                pos=0 #Search starting index
+                j = 0 #Index on batch
+                k = 0 #Index on matches
+
+                while j < len(batch):
+                    str_index = response.find(batch[j], pos)
+                    if str_index != -1:
+                        taxids[batch[j]] = int(matches[k])
+                        known_accession_taxid[batch[j]] = int(matches[k])
+                        
+                        pos = str_index+1
+                        k += 1
+                    j += 1
+            else:
+                for j in range(len(batch)):
+                    taxids[batch[j]] = int(matches[j])
+                    known_accession_taxid[batch[j]] = int(matches[j])
         except urllib.error.HTTPError as e:
             if e.code == 400:
                 for accession in batch:
@@ -154,32 +188,6 @@ def get_taxids_from_accessions(accessions: List[str], db="sra", batch_size=1000)
             else:
                 raise
 
-        response:str = handle.read().decode("utf-8")
-        handle.close()
-
-        matches = RE_EFETCH.findall(response)
-        
-        #If NCBI does shit (when it doesn't return all queried accessions metadata)
-        if len(matches) == 0:
-            pass
-        elif len(matches) != len(batch):
-            pos=0 #Search starting index
-            j = 0 #Index on batch
-            k = 0 #Index on matches
-
-            while j < len(batch):
-                str_index = response.find(batch[j], pos)
-                if str_index != -1:
-                    taxids[batch[j]] = int(matches[k])
-                    known_accession_taxid[batch[j]] = int(matches[k])
-                    
-                    pos = str_index+1
-                    k += 1
-                j += 1
-        else:
-            for j in range(len(batch)):
-                taxids[batch[j]] = int(matches[j])
-                known_accession_taxid[batch[j]] = int(matches[j])
 
     return [taxids[accession] for accession in accessions]
 
@@ -281,21 +289,24 @@ def main():
     processed = len(accessions) - len(unknown_accessions)
     batch_size = 100
 
+    #Get the expected time for 100 accessions per seconds
+    time_for_timeout = max(10, len(unknown_accessions) // 100)
+
     if len(unknown_accessions) == 0:
         print(f":: All accessions were found in dicts.", end="")
     else:
         print(f":: Retrieving accessions metadata from NCBI (batch size: {batch_size})...")
         print(f"\r\t{processed} / {len(accessions)} ({int(processed/len(accessions)*100)}%)", end="")
 
+    futures_batches : Dict[Future, List[str]] = OrderedDict() 
     try:
-        futures_batches = OrderedDict()
         with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_RATE) as executor:
             for i in range(0, len(unknown_accessions), batch_size):
                 batch = unknown_accessions[i:i+batch_size]
                 future = executor.submit(get_divisions_from_accessions, batch, batch_size)
                 futures_batches[future] = batch[:]
 
-            for future in concurrent.futures.as_completed(futures_batches):
+            for future in concurrent.futures.as_completed(futures_batches, time_for_timeout):
                 try:
                     future.result() #Discard
                 except urllib.error.HTTPError as e:
@@ -310,11 +321,19 @@ def main():
                     processed += len(futures_batches[future])
                     print(f"\r\t{processed} / {len(accessions)} ({int(processed/len(accessions)*100)}%)", end="")
 
+    except TimeoutError:
+        with open("timeout_accessions.txt", "a") as f:
+            for future in futures_batches:
+                if future.cancelled():
+                    batch = futures_batches[future]
+                    for accession in batch:
+                        known_accession_taxid[accession] = TIMEOUT_TAXID
+                        f.write(accession + "\n")
     except KeyboardInterrupt:
         pass
     except Exception as e:
-        with open("err.txt", "a") as f:
-            f.write(f"#Index: {fof}, error: {e}\n")
+        print(f"\nSomething went wrong: {e}")
+        print(traceback.format_exc(), end="\n\n")
     finally:
         if len(unknown_accessions) == 0:
             print("\n:: Dicts don't need to be updated.")

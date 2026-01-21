@@ -66,8 +66,9 @@ DIV_LOGANDIV = {
     "VRL" :  Div.VRL,
     "VRT" :  Div.VRT,
     "MUS" :  Div.MICE,
+    "PRO":   Div.UNKNOWN, #See in get_division_from_taxid(), will be overriden to check if ARC or BCT
+    
     #UNKNOWN
-    "PRO":   Div.UNKNOWN, #No corresponding group in Logan (Archea/Bact)
     "UNC":   Div.UNKNOWN, #Unclassified
     "UNA":   Div.UNKNOWN, #Unannotated
     "FUN":   Div.UNKNOWN, #No corresponding group in Logan (Fungi)
@@ -212,8 +213,21 @@ def get_division_from_taxid(taxid: int) -> dict:
         # Parse JSON output
         j = json.loads(result.stdout)
 
-        #Retrieve scientific name, division
-        known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
+        #If probacteria, see if it is an Archea or a Bacteria
+        if j["division"] == "PRO":
+            lineage = j["lineage"].split(":")
+            if len(lineage) >= 1:
+                match lineage[0].strip():
+                    case "Bacteria":
+                        known_taxid_div[taxid] = Div.BCT
+                    case "Archea":
+                        known_taxid_div[taxid] = Div.ARC
+                    case _:
+                        known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
+        else:
+            known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
+
+        #Retrieve scientific name
         known_taxid_organism[taxid] = j["scientificName"]
 
     except:

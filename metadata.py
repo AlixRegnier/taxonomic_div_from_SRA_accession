@@ -289,8 +289,8 @@ def main():
     processed = len(accessions) - len(unknown_accessions)
     batch_size = 100
 
-    #Get the expected time for 100 accessions per seconds
-    time_for_timeout = max(10, len(unknown_accessions) // 100)
+    #Get the expected time for 100 accessions per seconds + 2 seconds per batch call
+    time_for_timeout = max(10, (len(unknown_accessions) // 100) + (len(unknown_accessions) // batch_size) * 2)
 
     if len(unknown_accessions) == 0:
         print(f":: All accessions were found in dicts.", end="")
@@ -322,6 +322,7 @@ def main():
                     print(f"\r\t{processed} / {len(accessions)} ({int(processed/len(accessions)*100)}%)", end="")
 
     except TimeoutError:
+        cancelled_accessions = 0
         with open("timeout_accessions.txt", "a") as f:
             for future in futures_batches:
                 if future.cancelled():
@@ -329,6 +330,9 @@ def main():
                     for accession in batch:
                         known_accession_taxid[accession] = TIMEOUT_TAXID
                         f.write(accession + "\n")
+                        cancelled_accessions += 1
+
+        print(f"\nWarning: {cancelled_accessions} accessions were added to 'timeout_accessions.txt'")
     except KeyboardInterrupt:
         pass
     except Exception as e:

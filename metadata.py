@@ -213,19 +213,18 @@ def get_division_from_taxid(taxid: int) -> dict:
         # Parse JSON output
         j = json.loads(result.stdout)
 
+        #Default division
+        known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
+        
         #If probacteria, see if it is an Archea or a Bacteria
         if j["division"] == "PRO":
             lineage = j["lineage"].split(":")
             if len(lineage) >= 1:
                 match lineage[0].strip():
-                    case "Bacteria":
-                        known_taxid_div[taxid] = Div.BCT
                     case "Archea":
                         known_taxid_div[taxid] = Div.ARC
-                    case _:
-                        known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
-        else:
-            known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
+                    case "Bacteria":
+                        known_taxid_div[taxid] = Div.BCT
 
         #Retrieve scientific name
         known_taxid_organism[taxid] = j["scientificName"]

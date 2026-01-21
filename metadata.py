@@ -205,7 +205,7 @@ def get_division_from_taxid(taxid: int) -> dict:
         j = json.loads(result.stdout)
 
         #Retrieve scientific name, division
-        known_taxid_div[taxid] = DIV_LOGANDIV[j["division"]]
+        known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
         known_taxid_organism[taxid] = j["scientificName"]
 
     except:

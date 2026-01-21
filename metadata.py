@@ -24,8 +24,9 @@ import traceback
 
 from Bio import Entrez
 
-Entrez.api_key = "4459a438546c82f6e448b428a73e72eb0908"
-Entrez.email = "alix.regnier@inria.fr"
+#Get your NCBI API key from https://account.ncbi.nlm.nih.gov/settings/
+Entrez.api_key = "xxxxxxxxxxxxxxxxxx"
+Entrez.email = "your.ncbi.mail.address@xxxx.xxx"
 
 MAX_RATE = 9
 

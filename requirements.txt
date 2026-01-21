@@ -1,0 +1,7 @@
+#requirements
+
+matplotlib
+ratelimit
+biopython
+
+#tabulate #can be used to show some data

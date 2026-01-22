@@ -218,7 +218,7 @@ def get_division_from_taxid(taxid: int) -> dict:
         
         #If probacteria, see if it is an Archea or a Bacteria
         if j["division"] == "PRO":
-            lineage = j["lineage"].split(":")
+            lineage = j["lineage"].split(";")
             if len(lineage) >= 1:
                 match lineage[0].strip():
                     case "Archea":

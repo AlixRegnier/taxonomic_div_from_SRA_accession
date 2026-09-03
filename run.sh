@@ -13,7 +13,7 @@ echo "START ($i / 2869)"
 for f in index_data/*; do
 	index_name=${f#index_data/}
 
-	python3 metadata.py $index_name > logs/$index_name.log 2>&1
+	python3 metadata.py $index_name 10.0 > logs/$index_name.log 2>&1
 
 	i=$(($i+1))
 	echo "$index_name ($i / 2869)"

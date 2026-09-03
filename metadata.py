@@ -5,7 +5,8 @@ Currently, only corresponding ENA taxonomic division and organism are stored
 
 accession -> taxid -> { div, organism }
 
-Requires: pip install ratelimit,biopython,matplotlib
+Requires: pip3 install ratelimit,biopython,matplotlib
+Having installed: curl
 """
 
 import subprocess
@@ -15,8 +16,9 @@ import pickle
 import re
 import concurrent.futures
 from concurrent.futures import Future
+import os
 
-from random import sample, seed
+from random import sample
 from typing import List
 from collections import OrderedDict
 import urllib.error
@@ -67,7 +69,7 @@ DIV_LOGANDIV = {
     "VRL" :  Div.VRL,
     "VRT" :  Div.VRT,
     "MUS" :  Div.MICE,
-    "PRO":   Div.UNKNOWN, #See in get_division_from_taxid(), will be overriden to check if ARC or BCT
+    "PRO":   Div.UNKNOWN, #See in get_division_from_taxid(), will be overriden to check if BCT
     
     #UNKNOWN
     "UNC":   Div.UNKNOWN, #Unclassified
@@ -75,10 +77,6 @@ DIV_LOGANDIV = {
     "FUN":   Div.UNKNOWN, #No corresponding group in Logan (Fungi)
     "ARC":   Div.UNKNOWN  #No corresponding group in Logan (Archea)
 }
-
-STDIN = 0
-STDOUT = 1
-STDERR = 2
 
 UNKNOWN_TAXID = -1    #Was probably deleted from SRA
 UNRESOLVED_TAXID = -2 #Error couldn't be handled
@@ -92,12 +90,15 @@ BAD_TAXID_CODES = dict(zip(
 ))
 
 EXCEPTION_DIV = {
-    9604             : Div.HUMAN, #Hominidae
-    10066            : Div.MICE   #Muridae
+    9604  : Div.HUMAN, #Hominidae
+    10066 : Div.MICE   #Muridae
 }
 
-accession_logandiv = dict()
+if not os.path.exists("./pkl"):
+    os.mkdir("./pkl")
 
+if not os.path.exists("./camembert"):
+    os.mkdir("./camembert")
 
 #Load dictionaries
 print(":: Loading dicts...")
@@ -118,22 +119,6 @@ try:
         known_accession_taxid = pickle.load(f)
 except:
     known_accession_taxid = dict()
-
-def ex(d, depth=0):
-    if type(d) is dict:
-        for k in d:
-            print(depth*"\t", k, sep="")
-            ex(d[k], depth+1)
-    elif type(d) is list:
-        for i in range(len(d)):
-            print(depth*"\t", f"[{i}]", sep="")
-            ex(d[i], depth+1)
-    else:
-        print(depth*"\t", f"{type(d)}: {d}")
-
-#import tabulate
-#d = [(taxid, known_taxid_organism[taxid], known_taxid_div[taxid]) for taxid in known_taxid_div]
-#print(tabulate.tabulate(d))
 
 RE_EFETCH = re.compile(r"<TAXON_ID>([0-9]+)</TAXON_ID>")
 
@@ -228,15 +213,13 @@ def get_division_from_taxid(taxid: int) -> dict:
         if j["division"] == "PRO":
             lineage = j["lineage"].split(";")
             if len(lineage) >= 1:
-                match lineage[0].strip():
-                    case "Archea":
-                        known_taxid_div[taxid] = Div.ARC
-                    case "Bacteria":
+                match lineage[0].strip().lower():
+                    case "archea" | "bacteria":
                         known_taxid_div[taxid] = Div.BCT
 
         #Retrieve scientific name
         known_taxid_organism[taxid] = j["scientificName"]
-    except:
+    except Exception as e:
         known_taxid_div[taxid] = Div.UNRESOLVED
         known_taxid_organism[taxid] = "UNKNOWN"
     finally:
@@ -250,22 +233,25 @@ def get_divisions_from_accessions(accessions: List[str], batch_size=1000) -> str
 
     return divisions
 
-def camembert(div: str, accessions: List[str], filename: str = None):
-    divs = { get_division_from_taxid(known_accession_taxid[accession]) for accession in accessions}
+def camembert(div: str, accessions: List[str], index: str = None):
+    divs = { get_division_from_taxid(known_accession_taxid[accession]) for accession in accessions if accession in known_accession_taxid }
     divs.add(div)
 
     div_counts = dict(zip(divs, [0]*len(divs)))
 
     for accession in accessions:
-        div = get_division_from_taxid(known_accession_taxid[accession])
-        div_counts[div] += 1
+        if accession in known_accession_taxid:
+            div = get_division_from_taxid(known_accession_taxid[accession])
+            div_counts[div] += 1
 
     category = list(divs)
     value = [div_counts[div] for div in divs]
 
     _, ax = plt.subplots()
+    ax.set_title(index)
     ax.pie(value, labels=category, autopct="%1.1f%%")
 
+    filename = index + ".png"
     if filename is None:
         plt.show()
     else:
@@ -305,7 +291,6 @@ def main():
         for line in f:
             accession = line[:line.find(':')]
             accessions.append(accession)
-            accession_logandiv[accession] = index_div
 
     sampled_accessions = sample(accessions, max(1, int(len(accessions)*percent/100.0)))
 
@@ -323,9 +308,10 @@ def main():
     processed = len(accessions) - len(unknown_accessions)
     batch_size = min(100, max(10, len(unknown_accessions) // MAX_RATE))
 
-    #Get the expected time for 100 accessions per seconds + 2 seconds per batch call
-    time_for_timeout = None #max(10, (len(unknown_accessions) // 100) + (len(unknown_accessions) // batch_size) * 2) * 2
-    print(f":: Timeout: {time_for_timeout}s")
+    #Get the expected time for 50 accessions per seconds + 4 seconds per batch call
+    time_for_timeout = max(10, (len(unknown_accessions) // 100) + (len(unknown_accessions) // batch_size) * 2) * 2
+    if time_for_timeout is not None and time_for_timeout > 0:
+        print(f":: Timeout: {time_for_timeout}s")
 
     if len(unknown_accessions) == 0:
         print(f":: All accessions were found in dicts.", end="")
@@ -406,7 +392,7 @@ def main():
                 pickle.dump(known_accession_taxid, f)
 
     print(f":: Generate pie chart...")
-    camembert(index_div, accessions, f"{index_name}.png")
+    camembert(index_div, accessions, index_name)
 
 if __name__ == "__main__":
     main()

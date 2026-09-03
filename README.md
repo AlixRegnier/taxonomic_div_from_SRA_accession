@@ -2,6 +2,7 @@
 
 ## Requirements
 
+* You need to have ``curl``.
 * In ``metadata.py``, you need to put your API key and your NCBI account mail address.
 * Make sure your Python environment has all needed packages with:
 ```bash
@@ -23,12 +24,12 @@ index_data/
 ├── GENOMIC_BCT_12
 │   └── kmtricks.fof
 └── GENOMIC_BCT_13
-    └── kmtricks.fof
+│   └── kmtricks.fof
+...
 ```
 ## Getting accessions taxonomy from a single FOF in ``index_data``
 
 ```bash
-mkdir -p pkl camembert
 python3 metadata.py GENOMIC_BCT_10
 ```
 

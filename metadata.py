@@ -16,6 +16,7 @@ import re
 import concurrent.futures
 from concurrent.futures import Future
 
+from random import sample, seed
 from typing import List
 from collections import OrderedDict
 import urllib.error
@@ -28,8 +29,8 @@ import traceback
 from Bio import Entrez
 
 #Get your NCBI API key from https://account.ncbi.nlm.nih.gov/settings/
-Entrez.api_key = "xxxxxxxxxxxxxxxxxx"
-Entrez.email = "your.ncbi.mail.address@xxxx.xxx"
+Entrez.api_key = "XXXXXXX"
+Entrez.email = "your@mail.xxx"
 
 MAX_RATE = 9
 
@@ -75,16 +76,22 @@ DIV_LOGANDIV = {
     "ARC":   Div.UNKNOWN  #No corresponding group in Logan (Archea)
 }
 
-
+STDIN = 0
+STDOUT = 1
+STDERR = 2
 
 UNKNOWN_TAXID = -1    #Was probably deleted from SRA
 UNRESOLVED_TAXID = -2 #Error couldn't be handled
 TIMEOUT_TAXID = -3
 
+BAD_DIV_CODES = (Div.UNKNOWN, Div.UNRESOLVED, Div.TIMEOUT)
+
+BAD_TAXID_CODES = dict(zip(
+    (UNKNOWN_TAXID, UNRESOLVED_TAXID, TIMEOUT_TAXID), 
+    BAD_DIV_CODES
+))
+
 EXCEPTION_DIV = {
-    UNRESOLVED_TAXID : Div.UNRESOLVED,
-    UNKNOWN_TAXID    : Div.UNKNOWN,
-    TIMEOUT_TAXID    : Div.TIMEOUT,
     9604             : Div.HUMAN, #Hominidae
     10066            : Div.MICE   #Muridae
 }
@@ -98,13 +105,13 @@ try:
     with open("pkl/taxid_div.pkl", "rb") as f:
         known_taxid_div = pickle.load(f)
 except:
-    known_taxid_div = { 9604: Div.HUMAN, 10066: Div.MICE }
+    known_taxid_div = EXCEPTION_DIV.copy()
 
 try:
     with open("pkl/taxid_organism.pkl", "rb") as f:
         known_taxid_organism = pickle.load(f)
 except:
-    known_taxid_organism = { 9604: "Hominidae", 10066: "Muridae"}
+    known_taxid_organism = EXCEPTION_DIV.copy()
 
 try:
     with open("pkl/accession_taxid.pkl", "rb") as f:
@@ -173,7 +180,7 @@ def get_taxids_from_accessions(accessions: List[str], db="sra", batch_size=1000)
                     if str_index != -1:
                         taxids[batch[j]] = int(matches[k])
                         known_accession_taxid[batch[j]] = int(matches[k])
-                        
+
                         pos = str_index+1
                         k += 1
                     j += 1
@@ -189,19 +196,20 @@ def get_taxids_from_accessions(accessions: List[str], db="sra", batch_size=1000)
             else:
                 raise
 
-
     return [taxids[accession] for accession in accessions]
 
 def get_division_from_taxid(taxid: int) -> dict:
-
     #Check if taxid has an overriden division
     if taxid in EXCEPTION_DIV:
         return EXCEPTION_DIV[taxid]
+
+    if taxid in BAD_TAXID_CODES:
+        return BAD_TAXID_CODES[taxid]
     
     #Check if corresponding division is known
     if taxid in known_taxid_div:
         return known_taxid_div[taxid]
-    
+
     try:
         result = subprocess.run(
             ["curl", "https://www.ebi.ac.uk/ena/taxonomy/rest/tax-id/" + str(taxid)],
@@ -209,13 +217,13 @@ def get_division_from_taxid(taxid: int) -> dict:
             text=True,
             check=True
         )
-        
+
         # Parse JSON output
         j = json.loads(result.stdout)
 
         #Default division
         known_taxid_div[taxid] = DIV_LOGANDIV.get(j["division"], Div.UNKNOWN)
-        
+
         #If probacteria, see if it is an Archea or a Bacteria
         if j["division"] == "PRO":
             lineage = j["lineage"].split(";")
@@ -228,23 +236,19 @@ def get_division_from_taxid(taxid: int) -> dict:
 
         #Retrieve scientific name
         known_taxid_organism[taxid] = j["scientificName"]
-
     except:
         known_taxid_div[taxid] = Div.UNRESOLVED
         known_taxid_organism[taxid] = "UNKNOWN"
     finally:
         return known_taxid_div[taxid]
 
-
 def get_divisions_from_accessions(accessions: List[str], batch_size=1000) -> str:
     divisions = [None]*len(accessions)
 
-    for i, taxid in enumerate(get_taxids_from_accessions(accessions, batch_size=batch_size)):
+    for i, taxid in enumerate(get_taxids_from_accessions(accessions, db="sra", batch_size=batch_size)):
        divisions[i] = get_division_from_taxid(taxid)
 
     return divisions
-
-
 
 def camembert(div: str, accessions: List[str], filename: str = None):
     divs = { get_division_from_taxid(known_accession_taxid[accession]) for accession in accessions}
@@ -267,7 +271,6 @@ def camembert(div: str, accessions: List[str], filename: str = None):
     else:
         plt.savefig(f"camembert/{filename}", dpi=300)
 
-
 def get_index_div(index_name: str) -> str:
     a = index_name.find("_")
     b = index_name.find("_", a+1)
@@ -279,31 +282,50 @@ def get_index_div(index_name: str) -> str:
 
 def main():
 
-    if len(sys.argv) != 2:
-        print("Usage: python metadata.py <index_name>")
+    if len(sys.argv) < 2 or len(sys.argv) > 3:
+        print("Usage: python metadata.py <index_name> [percent=100.0]")
         exit(2)
     
     index_name = sys.argv[1]
     index_div = get_index_div(index_name)
     fof = f"index_data/{index_name}/kmtricks.fof"
 
+    percent = 100.0
+    if len(sys.argv) == 3:
+        percent = float(sys.argv[2])
+
     accessions = []
 
-    print(f":: Retrieving accessions from {index_name}...")
+    if int(percent) == 100:
+        print(f":: Retrieving all accessions from {index_name}... (ALL)")
+    else:
+        print(f":: Retrieving {percent}% of accessions from {index_name}... (SAMPLING)")
+
     with open(fof, "r") as f:
         for line in f:
             accession = line[:line.find(':')]
             accessions.append(accession)
             accession_logandiv[accession] = index_div
 
-    #Get unknown accessions
-    unknown_accessions = list(set(accessions) - known_accession_taxid.keys())
+    sampled_accessions = sample(accessions, max(1, int(len(accessions)*percent/100.0)))
+
+    #Track unknown accessions or unresolved accessions
+    unknown_accessions = []
+    for accession in sampled_accessions:
+        if accession in known_accession_taxid:
+            taxid = known_accession_taxid[accession]
+
+            if taxid in BAD_TAXID_CODES or known_taxid_div[taxid] in BAD_DIV_CODES:
+                unknown_accessions.append(accession)
+        else:
+            unknown_accessions.append(accession)
 
     processed = len(accessions) - len(unknown_accessions)
-    batch_size = 100
+    batch_size = min(100, max(10, len(unknown_accessions) // MAX_RATE))
 
     #Get the expected time for 100 accessions per seconds + 2 seconds per batch call
-    time_for_timeout = max(10, (len(unknown_accessions) // 100) + (len(unknown_accessions) // batch_size) * 2)
+    time_for_timeout = None #max(10, (len(unknown_accessions) // 100) + (len(unknown_accessions) // batch_size) * 2) * 2
+    print(f":: Timeout: {time_for_timeout}s")
 
     if len(unknown_accessions) == 0:
         print(f":: All accessions were found in dicts.", end="")
@@ -311,51 +333,69 @@ def main():
         print(f":: Retrieving accessions metadata from NCBI (batch size: {batch_size})...")
         print(f"\r\t{processed} / {len(accessions)} ({int(processed/len(accessions)*100)}%)", end="")
 
-    futures_batches : Dict[Future, List[str]] = OrderedDict() 
-    try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_RATE) as executor:
-            for i in range(0, len(unknown_accessions), batch_size):
-                batch = unknown_accessions[i:i+batch_size]
-                future = executor.submit(get_divisions_from_accessions, batch, batch_size)
-                futures_batches[future] = batch[:]
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=MAX_RATE)
+    future_to_batch = {}
 
-            for future in concurrent.futures.as_completed(futures_batches, time_for_timeout):
-                try:
-                    future.result() #Discard
-                except urllib.error.HTTPError as e:
-                    if e.code == 429:
-                        print(f"\nToo many requests were done to NCBI.")
-                    else:
-                        print(traceback.format_exc(), end="\n\n")
-                except Exception as e:
-                    print(f"\nSomething went wrong: {e}")
-                    print(traceback.format_exc(), end="\n\n")
-                finally:
-                    processed += len(futures_batches[future])
-                    print(f"\r\t{processed} / {len(accessions)} ({int(processed/len(accessions)*100)}%)", end="")
+    try:
+        for i in range(0, len(unknown_accessions), batch_size):
+            batch = unknown_accessions[i:i + batch_size]
+            future = executor.submit(
+                get_divisions_from_accessions,
+                batch,
+                batch_size,
+            )
+            future_to_batch[future] = batch
+
+        for future in concurrent.futures.as_completed(future_to_batch, timeout=time_for_timeout):
+            batch = future_to_batch[future]
+
+            try:
+                future.result()
+            except urllib.error.HTTPError as e:
+                if e.code == 429:
+                    print("\nToo many requests were made to NCBI.")
+                else:
+                    traceback.print_exc()
+            except Exception:
+                traceback.print_exc()
+            finally:
+                processed += len(batch)
+                total = len(accessions)
+                print(f"\r\t{processed} / {total} ({processed / total * 100:.0f}%)", end="")
 
     except TimeoutError:
-        cancelled_accessions = 0
-        with open("timeout_accessions.txt", "a") as f:
-            for future in futures_batches:
-                if future.cancelled():
-                    batch = futures_batches[future]
-                    for accession in batch:
-                        known_accession_taxid[accession] = TIMEOUT_TAXID
-                        f.write(accession + "\n")
-                        cancelled_accessions += 1
+        timed_out = []
 
-        print(f"\nWarning: {cancelled_accessions} accessions were added to 'timeout_accessions.txt'")
+        for future, batch in future_to_batch.items():
+            if not future.done():
+                # Works only if the job hasn't started.
+                future.cancel()
+                timed_out.extend(batch)
+
+        with open("timeout_accessions.txt", "a") as f:
+            for accession in timed_out:
+                known_accession_taxid[accession] = TIMEOUT_TAXID
+                f.write(accession + "\n")
+
+        print(f"\nWarning: {len(timed_out)} accessions timed out and were added to 'timeout_accessions.txt'.")
+
     except KeyboardInterrupt:
-        pass
-    except Exception as e:
-        print(f"\nSomething went wrong: {e}")
-        print(traceback.format_exc(), end="\n\n")
+        print("\nInterrupted.")
+
+        for future in future_to_batch:
+            future.cancel()
+
+        raise
+
     finally:
-        if len(unknown_accessions) == 0:
+        # Do not wait for running tasks here.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+        if not unknown_accessions:
             print("\n:: Dicts don't need to be updated.")
         else:
             print("\n:: Saving dicts...")
+
             with open("pkl/taxid_div.pkl", "wb") as f:
                 pickle.dump(known_taxid_div, f)
 
@@ -364,7 +404,8 @@ def main():
 
             with open("pkl/accession_taxid.pkl", "wb") as f:
                 pickle.dump(known_accession_taxid, f)
-        
+
+    print(f":: Generate pie chart...")
     camembert(index_div, accessions, f"{index_name}.png")
 
 if __name__ == "__main__":

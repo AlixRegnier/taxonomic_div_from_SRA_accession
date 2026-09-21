@@ -3,5 +3,6 @@
 matplotlib
 ratelimit
 biopython
-
+seaborn
+pandas
 #tabulate #can be used to show some data

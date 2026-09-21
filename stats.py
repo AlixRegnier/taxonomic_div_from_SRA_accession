@@ -22,7 +22,6 @@ import urllib.error
 import matplotlib.pyplot as plt
 from typing import Dict, List
 import pandas as pd
-from plotnine import *
 import seaborn
 
 import traceback
